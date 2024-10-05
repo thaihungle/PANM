@@ -1,0 +1,4 @@
+numpy==1.21.2
+tensorboard_logger==0.1.0
+torch==1.12.1
+tqdm==4.62.3
