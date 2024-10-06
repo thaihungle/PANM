@@ -24,9 +24,9 @@ class StraightThroughEstimator(nn.Module):
         x = STEFunction.apply(x)
         return x
 
-class AddressGen(nn.Module):
+class PoiterUnit(nn.Module):
 	def __init__(self, in_dim, hid_dim, emb_size, nheads=1, dropout=0, add_space=10):
-		super(AddressGen, self).__init__()
+		super(PoiterUnit, self).__init__()
 		self.hid_dim = hid_dim
 		self.emb_size = emb_size
 		self.controller = nn.GRU(in_dim, hid_dim, batch_first=False)
@@ -165,11 +165,11 @@ class PANM(nn.Module):
 		self.dropout = nn.Dropout(dropout)
 		self.norm0 = nn.LayerNorm(hidden_size*(self.Ha_num_pointers+1+self.Hc_num_pointers))
 		self.out = nn.Linear(hidden_size*(self.Ha_num_pointers+1+self.Hc_num_pointers), out_size)
-		addgens = []
+		punits = []
 		for _ in range(self.Ha_num_pointers):
-			addgen = AddressGen(add_space, controller_size, hidden_size, add_space=add_space)
-			addgens.append(addgen)
-		self.addgens = nn.ModuleList(addgens)
+			addgen = PoiterUnit(add_space, controller_size, hidden_size, add_space=add_space)
+			punits.append(addgen)
+		self.punits = nn.ModuleList(punits)
 
 		self.add_att = MultiheadAttention(embed_dim=hidden_size, num_heads=1,dropout=0.5, kdim=hidden_size, vdim=hidden_size)
 		tohs = []
@@ -220,7 +220,7 @@ class PANM(nn.Module):
 		return A, start_a, end_a, content_a
 		
 
-	def forward(self, src, target_length, tgt=None, teacher_forcing_ratio=-1, PAD_IDX=-1):
+	def forward(self, src, target_length, tgt=None):
 		trg=tgt
 		encoder_output, hidden = self.encoder(src)
 		
@@ -239,88 +239,70 @@ class PANM(nn.Module):
 
 		hidden = hidden[:self.decoder.n_layers]
 		output = Variable(trg.data[0, :])  # sos
-		is_fix = False
-		if teacher_forcing_ratio==0:
-			is_fix=True
-		A, cur_add1, cur_add2, cur_add3 = self.fast_gen_address(encoder_output.shape[0], batch_size, is_fix=is_fix)
+		A, cur_ptr1, cur_ptr2, cur_ptr3 = self.fast_gen_address(encoder_output.shape[0], batch_size)
 		A = A.to(encoder_output.device)
-		cur_add1 = cur_add1.to(encoder_output.device)
-		cur_add2 = cur_add2.to(encoder_output.device)
-		cur_add3 = cur_add3.to(encoder_output.device)
+		cur_ptr1 = cur_ptr1.to(encoder_output.device)
+		cur_ptr2 = cur_ptr2.to(encoder_output.device)
+		cur_ptr3 = cur_ptr3.to(encoder_output.device)
 		hiddena = []
 		
 		
-		cur_val2s = []
-		cur_add2s = []
-		cur_val2 = torch.zeros(1, batch_size, self.hidden_size).to(encoder_output.device)
 		
-
-		# cur_add1 =  torch.cat([cur_add1, cur_add2],dim=-1)
-		cur_add1s = []
-		cur_adds = []
+		cur_ptrs_mode1 = []
 		for i in range(self.Ha_num_pointers):
 			if i%2==0:
-				cur_add1s.append(cur_add1)
+				cur_ptrs_mode1.append(cur_ptr1)
 			else:
-				cur_add1s.append(cur_add2)
-			cur_adds.append(cur_add3)
+				cur_ptrs_mode1.append(cur_ptr2)
 			hiddena.append(hidden.clone().detach().zero_())
-
+		
+		cur_vals_mode2 = []
+		cur_ptrs_mode2 = []
+		
 		for _ in range(self.Hc_num_pointers):
-			cur_val2s.append(cur_val2.clone())
-			cur_add2s.append(cur_add3.clone())
-		cur_val2 = torch.cat(cur_val2s, dim=-1)
-		cur_add2 = torch.cat(cur_add2s, dim=-1)
+			cur_vals_mode2.append(torch.zeros(1, batch_size, self.hidden_size).to(encoder_output.device))
+			cur_ptrs_mode2.append(cur_ptr3.clone())
+		cur_val_mode2 = torch.cat(cur_vals_mode2, dim=-1)
+		cur_ptr_mode2 = torch.cat(cur_ptrs_mode2, dim=-1)
 
 		
 
 		pc_curadd = torch.zeros(batch_size, self.address_space).to(encoder_output.device)
 		for t in range(0, max_len):
-			cur_vals = []
+			cur_vals_mode1 = []
 			
 			for i in range(self.Ha_num_pointers):
-				cur_val, cur_add, hiddena[i], aweights1 = self.addgens[i](encoder_output, cur_add1s[i].unsqueeze(0), hiddena[i], A)
-				cur_adds[i] = cur_add
-				cur_vals.append(cur_val)
-				cur_add1s[i] = cur_add
+				cur_val_mode1, cur_add, hiddena[i], aweights1 = self.punits[i](encoder_output, cur_ptrs_mode1[i].unsqueeze(0), hiddena[i], A)
+				cur_vals_mode1.append(cur_val_mode1)
+				cur_ptrs_mode1[i] = cur_add
 				
-			cur_val = torch.cat(cur_vals,dim=-1)
-			cur_add = torch.cat(cur_adds, dim=-1)
+			cur_val_mode1 = torch.cat(cur_vals_mode1,dim=-1)
 			
 	
 			output, hidden, attn_weights = self.decoder(
-				torch.cat([output.unsqueeze(0), cur_val], dim=-1),
+				torch.cat([output.unsqueeze(0), cur_val_mode1], dim=-1),
 				hidden, encoder_output)
 		
-			# pc_curadd  = torch.matmul(attn_weights, A.view(A.shape[1],A.shape[0],-1)).squeeze(1)
 
-			cur_val2s = []
-			cur_add2s = []
+			cur_vals_mode2 = []
+			cur_ptrs_mode2 = []
 			for i in range(self.Hc_num_pointers):
 		
-				cur_val2, aweights2 = self.add_att(self.tohs[i](cur_val.squeeze(0)).unsqueeze(0), encoder_output, encoder_output)
-				cur_add2 = torch.matmul(aweights2, A.view(A.shape[1],A.shape[0],-1)).squeeze(1)
-				cur_val2s.append(cur_val2)
-				cur_add2s.append(cur_add2)
+				cur_val_mode2, aweights2 = self.add_att(self.tohs[i](cur_val_mode1.squeeze(0)).unsqueeze(0), encoder_output, encoder_output)
+				cur_ptr_mode2 = torch.matmul(aweights2, A.view(A.shape[1],A.shape[0],-1)).squeeze(1)
+				cur_vals_mode2.append(cur_val_mode2)
+				cur_ptrs_mode2.append(cur_ptr_mode2)
 		
 
-			cur_val2 = torch.cat(cur_val2s, dim=-1)
-			cur_add2 = torch.cat(cur_add2s, dim=-1)
+			cur_val_mode2 = torch.cat(cur_vals_mode2, dim=-1)
+			cur_ptr_mode2 = torch.cat(cur_ptrs_mode2, dim=-1)
 			
-			fout = torch.cat([output, cur_val.squeeze(0), cur_val2.squeeze(0)],dim=-1)
+			fout = torch.cat([output, cur_val_mode1.squeeze(0), cur_val_mode2.squeeze(0)],dim=-1)
 			output = self.out(self.dropout(fout))
 
 
 			outputs.append(output)
-			if teacher_forcing_ratio!=-1:
-				is_teacher = random.random() < teacher_forcing_ratio
-			else:
-				is_teacher = True
-			top1 = output.max(1)[1]
-			if not is_teacher and self.embedded:
-				print(top1)
-				top1 = self.s2stf_encoder.tgt_tok_emb(top1)	
-			output = (trg[t] if is_teacher else top1).to(src.device)
+			output = trg[t] 
 
 		return torch.stack(outputs), None
 
