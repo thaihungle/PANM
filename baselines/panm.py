@@ -7,22 +7,6 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from torch.nn import MultiheadAttention
 
-class STEFunction(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input):
-        return (input > 0).float()
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        return F.hardtanh(grad_output)
-
-class StraightThroughEstimator(nn.Module):
-    def __init__(self):
-        super(StraightThroughEstimator, self).__init__()
-
-    def forward(self, x):
-        x = STEFunction.apply(x)
-        return x
 
 class PoiterUnit(nn.Module):
 	def __init__(self, in_dim, hid_dim, emb_size, nheads=1, dropout=0, add_space=10):
@@ -35,14 +19,13 @@ class PoiterUnit(nn.Module):
 		self.is_train = True
 		self.A_map = nn.Linear(add_space, add_space)
 
-	
-
-	
 	def forward(self, inputs, cur_dp, hidden, A):
 		output, hidden = self.controller(cur_dp, hidden)
 		cur_val, aweights = self.add_att(self.q(hidden),self.A_map(A), inputs)
 		cur_add = torch.matmul(aweights, A.view(A.shape[1],A.shape[0],-1)).squeeze(1)
 		return cur_val, cur_add, hidden, aweights
+
+
 
 class Encoder(nn.Module):
 	def __init__(self, input_size, embed_size, hidden_size,
@@ -152,25 +135,20 @@ class PANM(nn.Module):
 		self.embed_size = embed_size
 		self.encoder = Encoder(in_size, embed_size, hidden_size,
 					n_layers=1, dropout=0.5, embedded=embedded)
-		
-
 		decoder = Decoder(embed_size+(hidden_size)*(self.Ha_num_pointers), controller_size, hidden_size, hidden_size,
 						n_layers=1, dropout=0, embedded=embedded)
-		
 		self.decoder = decoder
 		self.address_space = add_space
 		self.num_address = 2**self.address_space
 		self.A, _ = self.gen_address(self.num_address, 1,is_random=False)
 		self.A=self.A.squeeze(1)
 		self.dropout = nn.Dropout(dropout)
-		self.norm0 = nn.LayerNorm(hidden_size*(self.Ha_num_pointers+1+self.Hc_num_pointers))
 		self.out = nn.Linear(hidden_size*(self.Ha_num_pointers+1+self.Hc_num_pointers), out_size)
 		punits = []
 		for _ in range(self.Ha_num_pointers):
 			addgen = PoiterUnit(add_space, controller_size, hidden_size, add_space=add_space)
 			punits.append(addgen)
 		self.punits = nn.ModuleList(punits)
-
 		self.add_att = MultiheadAttention(embed_dim=hidden_size, num_heads=1,dropout=0.5, kdim=hidden_size, vdim=hidden_size)
 		tohs = []
 		for _ in range(self.Hc_num_pointers):
@@ -178,8 +156,6 @@ class PANM(nn.Module):
 			tohs.append(toh)
 		self.tohs = nn.ModuleList(tohs)
 		
-
-
 
 	def binary(self, x):
 		mask = 2**torch.arange(self.address_space)
@@ -208,7 +184,6 @@ class PANM(nn.Module):
 		start_a=torch.zeros(bs, self.address_space)
 		end_a=torch.zeros(bs, self.address_space)
 		content_a=torch.zeros(bs, self.address_space)
-
 		for b in range(bs):
 			if not is_fix:
 				start_p = random.randint(0, self.num_address)
@@ -265,9 +240,6 @@ class PANM(nn.Module):
 		cur_val_mode2 = torch.cat(cur_vals_mode2, dim=-1)
 		cur_ptr_mode2 = torch.cat(cur_ptrs_mode2, dim=-1)
 
-		
-
-		pc_curadd = torch.zeros(batch_size, self.address_space).to(encoder_output.device)
 		for t in range(0, max_len):
 			cur_vals_mode1 = []
 			
