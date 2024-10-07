@@ -32,17 +32,13 @@ def get_parser():
                         help='max_len')
     parser.add_argument('-mode_toy', type=str, default="onehot",
                         help='logit or onehot')
-    parser.add_argument('-nepochs', type=int, default=100,
-                        help='number of epochs for training')
     parser.add_argument('-freq_val', type=int, default=200,
                         help='validation frequence')
     parser.add_argument('-num_eval', type=int, default=10,
                         help='number of evaluation')
     parser.add_argument('-mode', type=str, default="train",
                         help='train or test')
-    parser.add_argument('-resume', type=str, default=None,
-                        help='resume path')
-    parser.add_argument('-seed', default=0,type=int,
+    parser.add_argument('-seed', default=42,type=int,
                      help='random seed')
     # todo: only rmsprop optimizer supported yet, support adam too
     parser.add_argument('-lr', type=float, default=1e-4,

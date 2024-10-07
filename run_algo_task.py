@@ -8,7 +8,7 @@ from torch import nn, optim
 from tensorboard_logger import configure, log_value
 import torch.nn.functional as F
 
-from datasets import CopyDataset
+from datasets import CopyDataset, ReverseDataset
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
@@ -17,7 +17,7 @@ args = get_parser().parse_args()
 
 
 def get_data(mode):
-	if  "copy" == args.task_name: 
+	if  "copy" == args.task_name or "reverse" == args.task_name: 
 		if mode=="train":
 			random_length = np.random.randint(task_params['min_seq_len'],
 											  task_params['max_seq_len'] + 1)
@@ -105,7 +105,8 @@ task_params["mode"]=args.mode_toy
 
 if "copy" == args.task_name:
 	dataset = CopyDataset(task_params)
-
+if "reverse" == args.task_name:
+	dataset = ReverseDataset(task_params)
 
 in_dim = dataset.in_dim
 out_dim = dataset.out_dim
@@ -124,7 +125,6 @@ elif 'att' in args.model_name:
 	hidden_dim = task_params['controller_size']*2
 	emb_layer = torch.nn.Linear(in_dim, hidden_dim)
 	model = Seq2Seq(hidden_dim, out_dim, hidden_dim, hidden_dim, embedded=True, emb_layer=emb_layer)
-
 elif 'dnc' in args.model_name:
 	from baselines.dnc.dnc import DNC
 	gpu_id=-1
@@ -159,8 +159,6 @@ elif 'transformer' in args.model_name:
 	model = TransformerModel(out_dim, emsize, nhead, d_hid, nlayers, dropout, encoder=mlp_encoder)
 elif 'panm' in args.model_name:
 	from baselines.panm import PANM
-
-
 	model = PANM(
 		in_size = in_dim,
 		out_size = out_dim,
